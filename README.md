@@ -1,12 +1,14 @@
-# Stock Analytics & Sentiment Intelligence Dashboard
+# Stock Sentiment Analytics Dashboard
 
-An end-to-end stock market analytics, NLP-driven sentiment scoring, and time-series predictive forecasting pipeline. This application comes in two modes: a database-driven local pipeline with machine learning forecasts, and an in-memory, RAM-optimized real-time application ready for cloud deployment.
+This repository contains an end-to-end data pipeline and dashboard application that integrates historical stock prices, news headlines, and predictive machine learning models to analyze market sentiment. 
+
+The project includes two main paths of execution: a local database-driven pipeline that runs quantitative forecasting models, and a lightweight, in-memory version designed for direct deployment to serverless hosting platforms like Streamlit Cloud.
 
 ---
 
-## 🏗️ System Architecture
+## Architecture Overview
 
-The project consists of a multi-stage database pipeline and an independent cloud-ready interface. The core pipeline flow is organized as follows:
+The core local pipeline handles data collection, database storage, feature computation, and time-series model training:
 
 ```mermaid
 graph TD
@@ -16,96 +18,80 @@ graph TD
     C -->|Engineered Features| E[forecasting_model.py]
     D -->|Daily Sentiment| E
     E -->|Price Forecasts| F[app.py]
-    F -->|Plotly Charts & News Cards| G((Streamlit UI))
+    F -->|Charts & News Feed| G((Streamlit UI))
 ```
+
+For serverless environments, the cloud version bypasses local storage and model execution to process all indicators and VADER sentiment scores in-memory on real-time data feeds.
 
 ---
 
-## 📁 Repository Structure
+## Project Structure
 
-```text
-├── data/                    # Ignored local SQLite database storage
-├── venv/                    # Ignored local virtual environment
-├── .env                     # Local secrets configuration (ignored)
-├── .gitignore               # Excludes database, env secrets, and build files
-├── models.py                # Database declarative mappings (SQLAlchemy 2.0)
-├── data_ingestion.py        # Ingestion script for market prices and news headlines
-├── feature_engineering.py   # Vectorized technical indicator computations
-├── sentiment_analysis.py    # NLP headline scoring using FinBERT & VADER
-├── forecasting_model.py     # Time-series machine learning model using Prophet
-├── app.py                   # Local interactive multi-tab dashboard
-├── app_cloud.py             # Cloud-ready, in-memory real-time dashboard
-└── requirements.txt         # Project package dependencies
-```
+*   **models.py**: Database schema declarations using SQLAlchemy 2.0 mapping.
+*   **data_ingestion.py**: Script to query historical market prices and news headlines.
+*   **feature_engineering.py**: Calculations for stock indicators (RSI, Bollinger Bands, MACD, etc.).
+*   **sentiment_analysis.py**: NLP sentiment scoring utilizing FinBERT and VADER models.
+*   **forecasting_model.py**: Time-series forecasting model using Facebook Prophet.
+*   **app.py**: Interactive multi-tab dashboard built for local database connections.
+*   **app_cloud.py**: Self-contained Streamlit application optimized for cloud containers.
+*   **requirements.txt**: Package dependencies required to run the pipeline.
+*   **.gitignore**: Prevents local environments, database files, and secrets from being committed.
 
 ---
 
-## ⚙️ Core Pipeline Modules
+## Technical Specifications
 
-### 1. Database Schema (`models.py`)
-Defines the relational tables using modern **SQLAlchemy 2.0** declarative syntax:
-*   **`StockPrice`**: Historical daily Open, High, Low, Close, and Volume (OHLCV) values.
-*   **`StockNews`**: Headlines metadata including publication timestamps, source names, and article links.
-*   **`DailySentiment`**: Aggregated daily sentiment scores mapping to specific tickers.
-*   **`PriceForecast`**: 30-day future forecasting values alongside lower and upper boundaries.
+### Database Schema (models.py)
+Uses SQLAlchemy declarative mappings to structure four SQLite tables:
+*   **StockPrice**: Stores daily historical open, high, low, close, and volume details.
+*   **StockNews**: Stores article metadata (title, publisher timestamp, source, URL).
+*   **DailySentiment**: Stores daily average sentiment scores calculated per ticker.
+*   **PriceForecast**: Stores future predictions along with upper and lower confidence intervals.
 
-### 2. Ingestion Pipeline (`data_ingestion.py`)
-Queries public APIs and populates raw databases:
-*   Uses `yfinance` to fetch **1 year** of daily price records for AAPL, GOOGL, TSLA, MSFT, and NVDA.
-*   Uses `newsapi-python` to fetch recent article titles over the last **30 days**.
-*   Implements transactional batch commits per ticker for efficiency.
+### Data Ingestion (data_ingestion.py)
+*   Fetches **1 year** of daily price history per ticker from Yahoo Finance using yfinance.
+*   Fetches recent article titles from the last **30 days** using the NewsAPI client.
+*   Commits database records in batches per ticker to limit write locks.
 
-### 3. Quantitative Feature Engineering (`feature_engineering.py`)
-Performs feature computations inside the SQLite engine:
-*   Generates a **continuous daily calendar index** and applies forward-filling (`ffill()`) to bridge gaps caused by exchange holidays and weekends.
-*   Calculates vectorized technical features:
+### Feature Calculations (feature_engineering.py)
+*   Reindexes price history to a continuous daily frequency (using forward filling) to bridge weekend and holiday exchange closures.
+*   Calculates vectorized indicators:
     *   **Returns**: Percent change of close price.
     *   **Volatility**: 30-day rolling standard deviation of daily returns.
-    *   **Wilder's RSI**: 14-day Relative Strength Index using exponential moving averages.
+    *   **RSI**: 14-period Relative Strength Index with exponential moving averages.
     *   **MACD**: 12 and 26-period EMAs with a 9-period signal line and histogram.
     *   **Bollinger Bands**: 20-period moving average shifted +/- 2 standard deviations.
-*   Automatically drops duplicate dates on ingestion to prevent reindexing failures.
 
-### 4. NLP Sentiment Analyzer (`sentiment_analysis.py`)
-Runs neural and lexicon sentiment evaluation on headlines:
-*   **FinBERT (`ProsusAI/finbert`)**: Evaluates financial nuance from HuggingFace pipelines. Headlines are scored dynamically as `positive - negative`.
-*   **VADER (`SentimentIntensityAnalyzer`)**: Standard rule-based lexicon parsing to generate baseline `compound` scores.
-*   **Composite Index**: Merges both models (`70% FinBERT + 30% VADER`) into a stable, highly predictive scoring system.
-*   Aggregates average scores daily and runs an **upsert** (insert-on-conflict-update) database operation.
+### Sentiment Analysis (sentiment_analysis.py)
+*   **FinBERT**: Financial language model that evaluates context-specific sentiment, outputting positive minus negative scores.
+*   **VADER**: Rule-based sentiment intensity analyzer.
+*   **Composite Index**: Combines both scores (70% FinBERT and 30% VADER) to calculate a balanced sentiment metric.
+*   Saves daily aggregates using SQLite insert-or-update queries.
 
-### 5. Time-Series Prophet Forecasts (`forecasting_model.py`)
-Maintains predictive capabilities:
-*   Inner-joins features and sentiment tables on `(ticker, date)`.
-*   Trains a **Facebook Prophet** model per ticker using the composite daily sentiment score as an **external regressor**.
-*   Validates models out-of-sample (evaluating **RMSE** and **MAPE**) on the last 30 days of data.
-*   Fits the final model on 100% of historical data, projects 30 days out into the future (using 7-day rolling sentiment average as a future placeholder), and writes predictions to `price_forecasts`.
-
-### 6. Interactive User Interface (`app.py`)
-Streamlit dashboard showcasing pipeline analytics:
-*   **Market Technicals Tab**: Render multi-axis synchronized Plotly charts overlaying Candlesticks with Bollinger Bands, alongside lower subplots for RSI and MACD.
-*   **Sentiment & Forecast Trends Tab**: Displays historical closing prices, 30-day Prophet forecasting lines, and shaded confidence bounds.
-*   **Live News Feed Tab**: Lists raw article headlines with bullish, bearish, or neutral styling borders.
+### Machine Learning Forecasts (forecasting_model.py)
+*   Inner-joins engineered features and daily sentiment scores.
+*   Trains Facebook Prophet models using the sentiment score as an external regressor.
+*   Validates out-of-sample performance (RMSE and MAPE) on the last 30 entries of historical data.
+*   Fits the final model on all historical data and writes a 30-day future forecast to the database.
 
 ---
 
-## ☁️ Cloud Application Deployment (`app_cloud.py`)
+## Cloud Deployment (app_cloud.py)
 
-To deploy on ephemeral container platforms (like **Streamlit Cloud**) that enforce memory limits (>1GB free tiers) and disallow writing local database files, `app_cloud.py` is configured as a standalone application:
-1.  **In-Memory Execution**: No database engines or local filesystem connections are configured.
-2.  **RAM Optimization**: HuggingFace/FinBERT loading is completely disabled. VADER Sentiment analysis is run exclusively on-the-fly.
-3.  **Real-Time Data Ingestion**: Uses a single cached function (`@st.cache_data(ttl=300)`) to fetch 5 days of 5-minute intraday bars and news headlines, computing all technical indicators in memory.
-4.  **Secrets Management**: Key retrieval relies on Streamlit's cloud-secrets manager (`st.secrets["NEWS_API_KEY"]`) rather than local files.
-5.  **Offline Fallbacks**: Gracefully serves mock headline sentiment analyses when NewsAPI keys are rate-limited or blocked on serverless hostings.
+For platforms like Streamlit Cloud where resources are limited (free tiers enforce a 1GB RAM cap) and databases cannot be written locally:
+*   **In-Memory Processing**: Operates without SQLite dependencies.
+*   **Memory Optimization**: Disables PyTorch/FinBERT architectures. Sentiment scores are calculated on-the-fly using VADER.
+*   **Intraday Feed**: Fetches 5 days of 5-minute bars using yfinance and calculates technical indicators in-memory.
+*   **Secrets Configuration**: Reads the NewsAPI Key from Streamlit Secrets (`st.secrets["NEWS_API_KEY"]`) instead of a local file.
+*   **Robust Fallback**: Includes realistic simulated news datasets to prevent crashes if the API key is missing or rate-limited.
 
 ---
 
-## 🚀 Setup & Execution Instructions
+## Setup & Local Run Instructions
 
-### 1. Prerequisites
-Ensure you have Python 3.10+ installed on your system.
+### 1. Environment Setup
+Activate a virtual environment and install the required dependencies:
 
-### 2. Install Dependencies
-Create a virtual environment, activate it, and install required libraries:
 ```bash
 # Windows
 python -m venv venv
@@ -118,49 +104,45 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Configure Local Secrets
-Create a `.env` file in the root workspace directory:
+### 2. Configure Secrets
+Create a `.env` file in the root directory:
+
 ```env
-NEWS_API_KEY=your_newsapi_org_api_key
+NEWS_API_KEY=your_api_key_here
 DATABASE_URL=sqlite:///data/stock_data.db
 ```
 
-### 4. Run the Data Pipeline
-Execute the data processing scripts sequentially to populate the database:
+### 3. Run Pipeline Scripts
+Execute the scripts in order to build and populate the local database:
+
 ```bash
-# Ingest raw prices and news headlines
-venv\Scripts\python.exe data_ingestion.py
-
-# Compute technical indicators
-venv\Scripts\python.exe feature_engineering.py
-
-# Run sentiment scoring models
-venv\Scripts\python.exe sentiment_analysis.py
-
-# Generate Prophet forecasts
-venv\Scripts\python.exe forecasting_model.py
+python data_ingestion.py
+python feature_engineering.py
+python sentiment_analysis.py
+python forecasting_model.py
 ```
 
-### 5. Launch the Dashboards
-Start your choice of Streamlit dashboards:
+### 4. Start the Application
+Run your preferred version of the dashboard:
+
 ```bash
-# Run local database-driven application
+# Run local database dashboard
 streamlit run app.py
 
-# Run real-time cloud-optimized application
+# Run real-time cloud dashboard
 streamlit run app_cloud.py
 ```
 
 ---
 
-## 🔐 Streamlit Cloud Secrets Setup
-To deploy the real-time app to Streamlit Cloud, add the following key inside your project's Streamlit Dashboard Settings (**Advanced Settings -> Secrets**):
+## Streamlit Cloud Secrets Configuration
+If deploying `app_cloud.py` to Streamlit Community Cloud, add your API key in the Advanced Settings (Secrets panel) using the following format:
 
 ```toml
-NEWS_API_KEY = "your_actual_newsapi_key_string"
+NEWS_API_KEY = "your_actual_newsapi_key_here"
 ```
 
 ---
 
-## 📄 License
-This project is open-source and available under the **MIT License**.
+## License
+This project is open-source and released under the MIT License.
